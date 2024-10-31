@@ -1,0 +1,79 @@
+pip install discord.py[voice]
+pip install youtube_dl
+pip install ffmpeg-python
+import discord
+from discord.ext import commands
+import youtube_dl
+import asyncio
+
+# إعداد البوت وتحديد البادئة للأوامر
+intents = discord.Intents.all()
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+# إعداد youtube_dl لخدمة تحميل وتشغيل الصوتيات
+ytdl_format_options = {
+    'format': 'bestaudio/best',
+    'postprocessors': [{
+        'key': 'FFmpegExtractAudio',
+        'preferredcodec': 'mp3',
+        'preferredquality': '192',
+    }],
+}
+ffmpeg_options = {
+    'options': '-vn',
+}
+ytdl = youtube_dl.YoutubeDL(ytdl_format_options)
+
+class YTDLSource(discord.PCMVolumeTransformer):
+    def __init__(self, source, *, data):
+        super().__init__(source)
+        self.data = data
+        self.title = data.get('title')
+        self.url = data.get('url')
+
+    @classmethod
+    async def from_url(cls, url, *, loop=None, stream=False):
+        loop = loop or asyncio.get_event_loop()
+        data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=not stream))
+        if 'entries' in data:
+            data = data['entries'][0]
+        filename = data['url'] if stream else ytdl.prepare_filename(data)
+        return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
+
+# أمر للانضمام إلى القناة الصوتية
+@bot.command(name="join")
+async def join(ctx):
+    if ctx.author.voice:
+        channel = ctx.author.voice.channel
+        await channel.connect()
+        await ctx.send("تم الانضمام إلى القناة الصوتية!")
+    else:
+        await ctx.send("يجب أن تكون في قناة صوتية أولاً!")
+
+# أمر لتشغيل الموسيقى
+@bot.command(name="play")
+async def play(ctx, url):
+    if ctx.voice_client is None:
+        if ctx.author.voice:
+            channel = ctx.author.voice.channel
+            await channel.connect()
+        else:
+            await ctx.send("يجب أن تكون في قناة صوتية لتشغيل الموسيقى!")
+            return
+
+    async with ctx.typing():
+        player = await YTDLSource.from_url(url, loop=bot.loop, stream=True)
+        ctx.voice_client.play(player, after=lambda e: print(f'خطأ: {e}') if e else None)
+        await ctx.send(f"يتم الآن تشغيل: {player.title}")
+
+# أمر للمغادرة من القناة الصوتية
+@bot.command(name="leave")
+async def leave(ctx):
+    if ctx.voice_client:
+        await ctx.voice_client.disconnect()
+        await ctx.send("تم الخروج من القناة الصوتية!")
+    else:
+        await ctx.send("البوت ليس في أي قناة صوتية.")
+
+# تشغيل البوت
+bot.run("YOUR_BOT_TOKEN")
